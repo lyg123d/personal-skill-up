@@ -29,13 +29,21 @@ export function YouTubeUploadPanel({ connected, video, metadata, sourceSummary }
       `출처:\n${sourceSummary || "- 출처 확인 필요"}\n\nAI가 생성한 요약은 오류가 있을 수 있습니다.`
   });
   const [loading, setLoading] = useState(false);
+  const [uploadPhase, setUploadPhase] = useState("");
   const [result, setResult] = useState<YouTubeUploadResult>();
+  const uploadReady = Boolean(video?.blob || video?.video_url);
 
   async function upload() {
     if (!video) return;
     setLoading(true);
+    setUploadPhase("");
     setResult(undefined);
     try {
+      if (video.blob) {
+        await uploadRenderedBlob(video.blob);
+        return;
+      }
+      setUploadPhase("원격 영상 URL을 YouTube로 전송 중");
       const response = await fetch("/api/youtube/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -47,7 +55,45 @@ export function YouTubeUploadPanel({ connected, video, metadata, sourceSummary }
       setResult({ status: "failed", error: error instanceof Error ? error.message : "업로드 실패" });
     } finally {
       setLoading(false);
+      setUploadPhase("");
     }
+  }
+
+  async function uploadRenderedBlob(blob: Blob) {
+    const mimeType = video?.mime_type || blob.type || "video/webm";
+    setUploadPhase("YouTube 업로드 세션 생성 중");
+    const sessionResponse = await fetch("/api/youtube/upload/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        metadata: form,
+        video: {
+          mime_type: mimeType,
+          size_bytes: video?.size_bytes || blob.size
+        }
+      })
+    });
+    const session = (await sessionResponse.json()) as { uploadUrl?: string; error?: string };
+    if (!sessionResponse.ok || !session.uploadUrl) {
+      throw new Error(session.error || "YouTube 업로드 세션 생성 실패");
+    }
+
+    setUploadPhase("영상 파일 업로드 중");
+    const uploadResponse = await fetch(session.uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": mimeType },
+      body: blob
+    });
+    const text = await uploadResponse.text();
+    if (!uploadResponse.ok) {
+      throw new Error(readYouTubeUploadError(text));
+    }
+    const uploaded = text ? (JSON.parse(text) as { id?: string }) : {};
+    setResult({
+      status: "success",
+      videoId: uploaded.id,
+      videoUrl: uploaded.id ? `https://www.youtube.com/watch?v=${uploaded.id}` : undefined
+    });
   }
 
   return (
@@ -63,6 +109,11 @@ export function YouTubeUploadPanel({ connected, video, metadata, sourceSummary }
         <a href="/api/auth/google/start">Google 계정 연결</a>
       </div>
       {video?.video_url ? <video className="uploadPreview" controls src={video.video_url} /> : null}
+      {video?.blob ? (
+        <p className="hint">
+          생성 영상 준비됨: {video.file_name || "news-shorts-video.webm"} · {Math.round(blobSizeMb(video.blob))}MB
+        </p>
+      ) : null}
       <div className="formGrid">
         <label className="field wide">
           <span>제목</span>
@@ -119,9 +170,9 @@ export function YouTubeUploadPanel({ connected, video, metadata, sourceSummary }
           Yes, made for kids
         </label>
       </div>
-      <button type="button" className="primaryButton" disabled={!connected || !video?.video_url || loading} onClick={upload}>
+      <button type="button" className="primaryButton" disabled={!connected || !uploadReady || loading} onClick={upload}>
         {loading ? <LoadingSpinner /> : null}
-        YouTube Shorts로 업로드
+        {loading ? uploadPhase || "업로드 중" : "YouTube Shorts로 업로드"}
       </button>
       {result?.videoUrl ? (
         <a className="downloadLink" href={result.videoUrl} target="_blank" rel="noreferrer">
@@ -131,4 +182,18 @@ export function YouTubeUploadPanel({ connected, video, metadata, sourceSummary }
       {result?.error ? <p className="hint">{result.error}</p> : null}
     </section>
   );
+}
+
+function blobSizeMb(blob: Blob) {
+  return blob.size / 1024 / 1024;
+}
+
+function readYouTubeUploadError(text: string) {
+  if (!text) return "YouTube 업로드에 실패했습니다.";
+  try {
+    const payload = JSON.parse(text) as { error?: { message?: string } };
+    return payload.error?.message || text;
+  } catch {
+    return text;
+  }
 }

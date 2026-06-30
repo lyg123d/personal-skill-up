@@ -1,0 +1,370 @@
+import type { GeneratedSceneImage, GeneratedVideo, GeneratedVoice, NewsScene, NewsShortsScript } from "@/types/news";
+
+const VIDEO_WIDTH = 720;
+const VIDEO_HEIGHT = 1280;
+const FPS = 30;
+
+type RenderShortsVideoInput = {
+  script: NewsShortsScript;
+  images: GeneratedSceneImage[];
+  audio?: GeneratedVoice;
+};
+
+type LoadedScene = {
+  scene: NewsScene;
+  image: HTMLImageElement | null;
+  startsAt: number;
+  endsAt: number;
+};
+
+export async function renderShortsVideo({ script, images, audio }: RenderShortsVideoInput): Promise<GeneratedVideo> {
+  if (typeof window === "undefined") {
+    throw new Error("브라우저에서만 영상 렌더링을 실행할 수 있습니다.");
+  }
+  if (!("MediaRecorder" in window)) {
+    throw new Error("이 브라우저는 영상 녹화를 지원하지 않습니다. Chrome 또는 Edge에서 다시 시도해주세요.");
+  }
+  if (!audio?.audio_url || audio.status !== "success") {
+    throw new Error("TTS 음성을 먼저 생성해야 완성 영상으로 렌더링할 수 있습니다.");
+  }
+
+  const mimeType = pickRecordingMimeType();
+  if (!mimeType) {
+    throw new Error("이 브라우저에서 YouTube 업로드용 WebM 영상을 만들 수 없습니다.");
+  }
+
+  const audioBuffer = await decodeAudio(audio.audio_url);
+  const scenes = buildTimeline(script.scenes, images);
+  const renderDuration = Math.max(
+    3,
+    Math.min(180, Math.max(script.total_duration_sec || 0, audioBuffer.duration, scenes.at(-1)?.endsAt || 0))
+  );
+
+  const loadedScenes = await Promise.all(
+    scenes.map(async (entry) => ({
+      ...entry,
+      image: await loadImage(entry.imageUrl)
+    }))
+  );
+
+  const canvas = document.createElement("canvas");
+  canvas.width = VIDEO_WIDTH;
+  canvas.height = VIDEO_HEIGHT;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("영상 캔버스를 초기화하지 못했습니다.");
+  }
+
+  const AudioContextCtor = window.AudioContext || getWebkitAudioContext();
+  if (!AudioContextCtor) {
+    throw new Error("이 브라우저는 오디오 합성을 지원하지 않습니다.");
+  }
+
+  const audioContext = new AudioContextCtor();
+  await audioContext.resume();
+  const audioSource = audioContext.createBufferSource();
+  const audioDestination = audioContext.createMediaStreamDestination();
+  audioSource.buffer = audioBuffer;
+  audioSource.connect(audioDestination);
+
+  const videoStream = canvas.captureStream(FPS);
+  const stream = new MediaStream([...videoStream.getVideoTracks(), ...audioDestination.stream.getAudioTracks()]);
+
+  const blob = await recordCanvasStream({
+    ctx,
+    stream,
+    audioContext,
+    audioSource,
+    loadedScenes,
+    script,
+    duration: renderDuration,
+    mimeType
+  });
+
+  const videoUrl = URL.createObjectURL(blob);
+  return {
+    status: "success",
+    video_url: videoUrl,
+    file_name: `news-shorts-${Date.now()}.webm`,
+    mime_type: blob.type || mimeType,
+    size_bytes: blob.size,
+    duration_sec: Math.round(renderDuration),
+    blob
+  };
+}
+
+function pickRecordingMimeType() {
+  const candidates = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"];
+  return candidates.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) || "";
+}
+
+async function decodeAudio(audioUrl: string) {
+  const AudioContextCtor = window.AudioContext || getWebkitAudioContext();
+  if (!AudioContextCtor) {
+    throw new Error("이 브라우저는 오디오 디코딩을 지원하지 않습니다.");
+  }
+  const response = await fetch(audioUrl);
+  if (!response.ok) {
+    throw new Error("TTS 오디오 파일을 불러오지 못했습니다.");
+  }
+  const arrayBuffer = await response.arrayBuffer();
+  const audioContext = new AudioContextCtor();
+  try {
+    return await audioContext.decodeAudioData(arrayBuffer.slice(0));
+  } finally {
+    void audioContext.close();
+  }
+}
+
+function getWebkitAudioContext() {
+  return (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+}
+
+function buildTimeline(scenes: NewsScene[], images: GeneratedSceneImage[]) {
+  let elapsed = 0;
+  return scenes.map((scene) => {
+    const duration = Math.max(1, scene.duration_sec || 1);
+    const image = images.find((item) => item.scene_number === scene.scene_number && item.status === "success");
+    const entry = {
+      scene,
+      imageUrl: image?.image_url,
+      startsAt: elapsed,
+      endsAt: elapsed + duration
+    };
+    elapsed += duration;
+    return entry;
+  });
+}
+
+async function loadImage(src?: string) {
+  if (!src) return null;
+  const image = new Image();
+  image.decoding = "async";
+  if (!src.startsWith("data:") && !src.startsWith("blob:")) {
+    image.crossOrigin = "anonymous";
+  }
+  image.src = src;
+  try {
+    await image.decode();
+    return image;
+  } catch {
+    return null;
+  }
+}
+
+function recordCanvasStream({
+  ctx,
+  stream,
+  audioContext,
+  audioSource,
+  loadedScenes,
+  script,
+  duration,
+  mimeType
+}: {
+  ctx: CanvasRenderingContext2D;
+  stream: MediaStream;
+  audioContext: AudioContext;
+  audioSource: AudioBufferSourceNode;
+  loadedScenes: LoadedScene[];
+  script: NewsShortsScript;
+  duration: number;
+  mimeType: string;
+}) {
+  return new Promise<Blob>((resolve, reject) => {
+    const chunks: BlobPart[] = [];
+    const recorder = new MediaRecorder(stream, { mimeType });
+    let frameId = 0;
+    const delayMs = 120;
+    const startedAt = performance.now() + delayMs;
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        chunks.push(event.data);
+      }
+    };
+    recorder.onerror = () => {
+      cancelAnimationFrame(frameId);
+      stream.getTracks().forEach((track) => track.stop());
+      void audioContext.close();
+      reject(new Error("영상 녹화 중 오류가 발생했습니다."));
+    };
+    recorder.onstop = () => {
+      cancelAnimationFrame(frameId);
+      stream.getTracks().forEach((track) => track.stop());
+      void audioContext.close();
+      resolve(new Blob(chunks, { type: mimeType }));
+    };
+
+    const draw = () => {
+      const elapsed = Math.max(0, (performance.now() - startedAt) / 1000);
+      drawFrame(ctx, loadedScenes, script, Math.min(elapsed, duration), duration);
+      if (elapsed <= duration + 0.1) {
+        frameId = requestAnimationFrame(draw);
+      }
+    };
+
+    drawFrame(ctx, loadedScenes, script, 0, duration);
+    recorder.start(500);
+    setTimeout(() => {
+      audioSource.start();
+      frameId = requestAnimationFrame(draw);
+    }, delayMs);
+    setTimeout(() => {
+      if (recorder.state === "recording") {
+        recorder.stop();
+      }
+    }, Math.ceil((duration + 0.35) * 1000));
+  });
+}
+
+function drawFrame(
+  ctx: CanvasRenderingContext2D,
+  loadedScenes: LoadedScene[],
+  script: NewsShortsScript,
+  elapsed: number,
+  duration: number
+) {
+  const scene = pickScene(loadedScenes, elapsed);
+  ctx.clearRect(0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
+  drawBackground(ctx, scene?.image || null, scene?.scene.scene_number || 1);
+  drawOverlay(ctx);
+  drawTopChrome(ctx, script.title, elapsed, duration);
+  if (scene) {
+    drawSceneText(ctx, scene.scene);
+  }
+  drawFooter(ctx, script.source_summary);
+}
+
+function pickScene(loadedScenes: LoadedScene[], elapsed: number) {
+  return (
+    loadedScenes.find((entry) => elapsed >= entry.startsAt && elapsed < entry.endsAt) ||
+    loadedScenes.at(-1) ||
+    null
+  );
+}
+
+function drawBackground(ctx: CanvasRenderingContext2D, image: HTMLImageElement | null, sceneNumber: number) {
+  const gradient = ctx.createLinearGradient(0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
+  gradient.addColorStop(0, sceneNumber % 2 ? "#16312f" : "#182b44");
+  gradient.addColorStop(0.55, "#1d2932");
+  gradient.addColorStop(1, sceneNumber % 2 ? "#3b2f17" : "#2c3522");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
+
+  if (!image) return;
+  const scale = Math.max(VIDEO_WIDTH / image.width, VIDEO_HEIGHT / image.height);
+  const width = image.width * scale;
+  const height = image.height * scale;
+  const x = (VIDEO_WIDTH - width) / 2;
+  const y = (VIDEO_HEIGHT - height) / 2;
+  ctx.drawImage(image, x, y, width, height);
+}
+
+function drawOverlay(ctx: CanvasRenderingContext2D) {
+  const dark = ctx.createLinearGradient(0, 0, 0, VIDEO_HEIGHT);
+  dark.addColorStop(0, "rgba(0, 0, 0, 0.42)");
+  dark.addColorStop(0.44, "rgba(0, 0, 0, 0.14)");
+  dark.addColorStop(0.72, "rgba(0, 0, 0, 0.58)");
+  dark.addColorStop(1, "rgba(0, 0, 0, 0.84)");
+  ctx.fillStyle = dark;
+  ctx.fillRect(0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
+}
+
+function drawTopChrome(ctx: CanvasRenderingContext2D, title: string, elapsed: number, duration: number) {
+  ctx.fillStyle = "rgba(255, 255, 255, 0.92)";
+  ctx.font = "800 25px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  ctx.fillText("NEWS SHORTS", 54, 74);
+
+  ctx.font = "700 23px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  drawWrappedText(ctx, title, 54, 112, VIDEO_WIDTH - 108, 31, 2);
+
+  const barWidth = VIDEO_WIDTH - 108;
+  ctx.fillStyle = "rgba(255, 255, 255, 0.28)";
+  roundRect(ctx, 54, 154, barWidth, 8, 999);
+  ctx.fillStyle = "#70e0cc";
+  roundRect(ctx, 54, 154, Math.max(16, barWidth * Math.min(1, elapsed / duration)), 8, 999);
+}
+
+function drawSceneText(ctx: CanvasRenderingContext2D, scene: NewsScene) {
+  ctx.fillStyle = "#ffcf70";
+  ctx.font = "900 30px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  ctx.fillText(`SCENE ${scene.scene_number}`, 54, 790);
+
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "900 54px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  drawWrappedText(ctx, scene.subtitle || scene.scene_title, 54, 865, VIDEO_WIDTH - 108, 64, 4);
+
+  ctx.fillStyle = "rgba(255, 255, 255, 0.86)";
+  ctx.font = "700 28px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  drawWrappedText(ctx, scene.scene_title, 54, 1135, VIDEO_WIDTH - 108, 36, 2);
+}
+
+function drawFooter(ctx: CanvasRenderingContext2D, sourceSummary: string) {
+  ctx.fillStyle = "rgba(255, 255, 255, 0.76)";
+  ctx.font = "600 20px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  drawWrappedText(ctx, sourceSummary || "출처 확인 필요", 54, 1210, VIDEO_WIDTH - 108, 26, 2);
+}
+
+function drawWrappedText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  lineHeight: number,
+  maxLines: number
+) {
+  const lines = wrapText(ctx, text, maxWidth, maxLines);
+  lines.forEach((line, index) => {
+    ctx.fillText(line, x, y + index * lineHeight);
+  });
+}
+
+function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number, maxLines: number) {
+  const tokens = tokenize(text);
+  const lines: string[] = [];
+  let line = "";
+
+  for (const token of tokens) {
+    const test = line ? `${line}${token}` : token.trimStart();
+    if (ctx.measureText(test).width <= maxWidth) {
+      line = test;
+      continue;
+    }
+    if (line) {
+      lines.push(line.trim());
+      line = token.trimStart();
+    } else {
+      lines.push(token.trim());
+      line = "";
+    }
+    if (lines.length === maxLines) break;
+  }
+
+  if (line && lines.length < maxLines) {
+    lines.push(line.trim());
+  }
+  if (lines.length > maxLines) {
+    lines.length = maxLines;
+  }
+  const last = lines.at(-1);
+  if (last && tokens.join("").length > lines.join("").length) {
+    lines[lines.length - 1] = last.length > 1 ? `${last.slice(0, -1)}...` : "...";
+  }
+  return lines;
+}
+
+function tokenize(text: string) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+  const words = normalized.split(/(\s+)/).filter(Boolean);
+  if (words.length > 1) return words;
+  return Array.from(normalized);
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, height, radius);
+  ctx.fill();
+}

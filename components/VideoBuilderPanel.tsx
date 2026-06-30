@@ -28,6 +28,11 @@ export function VideoBuilderPanel({
   onRenderVideo,
   onDownloadPackage
 }: VideoBuilderPanelProps) {
+  const readyImageCount = images.filter((image) => image.status === "success" && image.image_url).length;
+  const readyImages = Boolean(script?.scenes.length && readyImageCount >= script.scenes.length);
+  const readyVoice = Boolean(voice?.status === "success" && voice.audio_url);
+  const canRenderVideo = Boolean(script && readyImages && readyVoice);
+
   return (
     <section className="section">
       <div className="sectionHeader">
@@ -43,24 +48,31 @@ export function VideoBuilderPanel({
           {loadingVoice ? <LoadingSpinner /> : null}
           내레이션 음성 생성
         </button>
-        <button type="button" onClick={onRenderVideo} disabled={!script || loadingVideo}>
+        <button type="button" onClick={onRenderVideo} disabled={!canRenderVideo || loadingVideo}>
           {loadingVideo ? <LoadingSpinner /> : null}
-          MP4 영상 생성
+          완성 영상 생성
         </button>
         <button type="button" onClick={onDownloadPackage} disabled={!script}>
           제작 패키지 다운로드
         </button>
       </div>
       <div className="statusGrid">
-        <span>이미지 {images.filter((image) => image.status === "success").length}/{script?.scenes.length || 0}</span>
+        <span>이미지 {readyImageCount}/{script?.scenes.length || 0}</span>
         <span>음성 {voice?.status || "대기"}</span>
-        <span>영상 {video?.status || "렌더 adapter 대기"}</span>
+        <span>영상 {video?.status || "대기"}</span>
       </div>
+      {script && !canRenderVideo ? (
+        <p className="hint">완성 영상은 모든 씬 이미지와 TTS 음성이 준비된 뒤 생성할 수 있습니다.</p>
+      ) : null}
       {voice?.audio_url ? <audio controls src={voice.audio_url} /> : null}
       {video?.video_url ? (
-        <a className="downloadLink" href={video.video_url} download={video.file_name || "news-shorts-video.mp4"}>
-          영상 다운로드
-        </a>
+        <div className="videoResult">
+          <video controls src={video.video_url} />
+          <a className="downloadLink" href={video.video_url} download={video.file_name || "news-shorts-video.webm"}>
+            영상 다운로드
+          </a>
+          {video.size_bytes ? <span className="hint">{Math.round(video.size_bytes / 1024 / 1024)}MB · {video.mime_type}</span> : null}
+        </div>
       ) : null}
       {video?.error ? <p className="hint">{video.error}</p> : null}
     </section>

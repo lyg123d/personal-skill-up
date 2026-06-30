@@ -15,6 +15,7 @@ import { ShortsPreview } from "@/components/ShortsPreview";
 import { SourceList } from "@/components/SourceList";
 import { VideoBuilderPanel } from "@/components/VideoBuilderPanel";
 import { YouTubeUploadPanel } from "@/components/YouTubeUploadPanel";
+import { renderShortsVideo } from "@/lib/clientVideo";
 import { STORAGE_KEY } from "@/lib/storage";
 import type {
   CollectNewsResponse,
@@ -23,8 +24,7 @@ import type {
   GenerateNewsScriptResponse,
   GenerateVoiceResponse,
   NewsCandidate,
-  NewsStudioState,
-  RenderVideoResponse
+  NewsStudioState
 } from "@/types/news";
 
 const demoText = `AI 반도체 시장 경쟁이 빨라지고 있습니다.
@@ -68,7 +68,7 @@ export default function Home() {
     voice: false,
     video: false
   });
-  const [youtubeConnected] = useState(() => {
+  const [youtubeConnected, setYoutubeConnected] = useState(() => {
     if (typeof window === "undefined") return false;
     return new URLSearchParams(window.location.search).get("youtube") === "connected";
   });
@@ -94,6 +94,15 @@ export default function Home() {
       // localStorage can fail in private mode or if metadata grows too large.
     }
   }, [state]);
+
+  useEffect(() => {
+    fetch("/api/auth/google/status")
+      .then((response) => response.json())
+      .then((payload: { connected?: boolean }) => {
+        if (payload.connected) setYoutubeConnected(true);
+      })
+      .catch(() => undefined);
+  }, []);
 
   async function collectNews() {
     setError("");
@@ -236,14 +245,8 @@ export default function Home() {
     setLoading((prev) => ({ ...prev, video: true }));
     setState((prev) => ({ ...prev, step: "rendering_video" }));
     try {
-      const response = await fetch("/api/video/render", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ script: state.script, images: state.images, audio: state.voice })
-      });
-      const payload = (await response.json()) as RenderVideoResponse & { error?: string };
-      if (!response.ok) throw new Error(payload.error || "영상 렌더링 실패");
-      setState((prev) => ({ ...prev, video: payload.video, step: payload.video.status === "success" ? "video_ready" : "script_ready" }));
+      const video = await renderShortsVideo({ script: state.script, images: state.images, audio: state.voice });
+      setState((prev) => ({ ...prev, video, step: "video_ready" }));
     } catch (event) {
       setError(event instanceof Error ? event.message : "영상 렌더링 실패");
       setState((prev) => ({ ...prev, step: "error" }));
@@ -348,6 +351,15 @@ function sanitizeForStorage(state: NewsStudioState): NewsStudioState {
       image_url: image.image_url?.startsWith("data:") ? undefined : image.image_url
     })),
     voice: state.voice?.audio_url?.startsWith("data:") ? { ...state.voice, audio_url: undefined } : state.voice,
-    video: state.video?.video_url?.startsWith("data:") ? { ...state.video, video_url: undefined } : state.video
+    video: state.video
+      ? {
+          ...state.video,
+          video_url:
+            state.video.video_url?.startsWith("data:") || state.video.video_url?.startsWith("blob:")
+              ? undefined
+              : state.video.video_url,
+          blob: undefined
+        }
+      : undefined
   };
 }

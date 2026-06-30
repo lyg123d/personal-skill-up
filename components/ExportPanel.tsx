@@ -56,7 +56,7 @@ export function ExportPanel({ brief, script, sources, images, video }: ExportPan
           JSON 다운로드
         </button>
         {video?.video_url ? (
-          <a href={video.video_url} download={video.file_name || "news-shorts-video.mp4"}>
+          <a href={video.video_url} download={video.file_name || "news-shorts-video.webm"}>
             영상 다운로드
           </a>
         ) : null}

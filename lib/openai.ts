@@ -70,7 +70,7 @@ export async function generateImageWithOpenAI(prompt: string) {
     body: JSON.stringify({
       model,
       prompt,
-      size: "1024x1792",
+      size: "1024x1536",
       n: 1
     })
   });

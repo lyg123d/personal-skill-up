@@ -7,7 +7,7 @@ const steps: Array<{ id: NewsGenerationStep; label: string }> = [
   { id: "generating_script", label: "스크립트 작성 중" },
   { id: "generating_images", label: "이미지 생성 중" },
   { id: "generating_voice", label: "음성 생성 중" },
-  { id: "rendering_video", label: "YouTube 업로드 준비" },
+  { id: "rendering_video", label: "완성 영상 생성 중" },
   { id: "uploaded", label: "업로드 완료" }
 ];
 

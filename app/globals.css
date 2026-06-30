@@ -494,6 +494,19 @@ audio,
   margin-top: 12px;
 }
 
+.videoResult {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.videoResult video {
+  width: 100%;
+  max-height: 420px;
+  aspect-ratio: 9 / 16;
+  background: #111820;
+}
+
 .uploadPreview {
   aspect-ratio: 9 / 16;
   max-height: 420px;

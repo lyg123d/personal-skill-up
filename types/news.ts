@@ -74,6 +74,9 @@ export type GeneratedVoice = {
 export type GeneratedVideo = {
   video_url?: string;
   file_name?: string;
+  mime_type?: string;
+  size_bytes?: number;
+  blob?: Blob;
   duration_sec?: number;
   status: "success" | "failed";
   error?: string;

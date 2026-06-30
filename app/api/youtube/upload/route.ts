@@ -40,8 +40,9 @@ export async function POST(request: NextRequest) {
       throw new Error("영상 파일을 가져오지 못했습니다.");
     }
     const videoBlob = await videoResponse.blob();
+    const contentType = body.video.mime_type || videoBlob.type || "video/mp4";
     const boundary = `news-shorts-${crypto.randomUUID()}`;
-    const multipartBody = await buildMultipartBody(boundary, metadata, videoBlob);
+    const multipartBody = await buildMultipartBody(boundary, metadata, videoBlob, contentType);
 
     const uploadResponse = await fetch(
       "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status",
@@ -80,12 +81,12 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function buildMultipartBody(boundary: string, metadata: unknown, videoBlob: Blob) {
+async function buildMultipartBody(boundary: string, metadata: unknown, videoBlob: Blob, contentType: string) {
   const encoder = new TextEncoder();
   const metaPart = encoder.encode(
     `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`
   );
-  const mediaHeader = encoder.encode(`--${boundary}\r\nContent-Type: video/mp4\r\n\r\n`);
+  const mediaHeader = encoder.encode(`--${boundary}\r\nContent-Type: ${contentType}\r\n\r\n`);
   const media = new Uint8Array(await videoBlob.arrayBuffer());
   const end = encoder.encode(`\r\n--${boundary}--`);
   const body = new Uint8Array(metaPart.length + mediaHeader.length + media.length + end.length);

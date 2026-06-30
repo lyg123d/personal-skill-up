@@ -10,9 +10,10 @@
 - 사실 기반 숏츠 스크립트와 씬 타임라인 생성
 - 뉴스용 안전 이미지 프롬프트 적용
 - OpenAI 이미지 생성 및 TTS 연결
+- 브라우저 기반 9:16 WebM 영상 생성
 - 제작 패키지 JSON 다운로드
 - YouTube 업로드용 제목, 설명, 태그, 공개 범위, madeForKids 편집
-- Google OAuth 및 YouTube upload API route 구조
+- Google OAuth 및 YouTube resumable upload API route 구조
 
 ## 뉴스 입력 방식
 
@@ -94,11 +95,13 @@ npm run lint
 npm run build
 ```
 
-## 영상 렌더링 제한 사항
+## 영상 렌더링
 
-Vercel 서버리스 환경에서는 긴 ffmpeg 렌더링과 대용량 파일 처리가 안정적이지 않을 수 있습니다. 현재 `/api/video/render`는 adapter 구조만 제공하며, MP4 서버 렌더러가 연결되지 않으면 제작 패키지 다운로드를 사용합니다.
+Vercel 서버리스 환경에서는 긴 ffmpeg 렌더링과 대용량 파일 처리가 안정적이지 않을 수 있습니다. 이 앱은 서버에서 MP4를 렌더링하지 않고, 브라우저 `canvas`와 `MediaRecorder`로 씬 이미지, 자막, TTS 음성을 합쳐 9:16 WebM 영상을 만듭니다.
 
-추후 연결 후보:
+생성된 WebM 파일은 YouTube 업로드 패널에서 resumable upload 세션을 통해 브라우저가 Google 업로드 URL로 직접 전송합니다. 따라서 대용량 영상 파일이 Vercel API route를 통과하지 않습니다.
+
+서버 렌더링이 필요한 경우 추후 연결 후보:
 
 - Remotion Lambda
 - Cloud Run
