@@ -31,7 +31,7 @@ export function VideoBuilderPanel({
   const readyImageCount = images.filter((image) => image.status === "success" && image.image_url).length;
   const readyImages = Boolean(script?.scenes.length && readyImageCount >= script.scenes.length);
   const readyVoice = Boolean(voice?.status === "success" && voice.audio_url);
-  const canRenderVideo = Boolean(script && readyImages && readyVoice);
+  const canRenderVideo = Boolean(script && readyImages);
 
   return (
     <section className="section">
@@ -62,7 +62,10 @@ export function VideoBuilderPanel({
         <span>영상 {video?.status || "대기"}</span>
       </div>
       {script && !canRenderVideo ? (
-        <p className="hint">완성 영상은 모든 씬 이미지와 TTS 음성이 준비된 뒤 생성할 수 있습니다.</p>
+        <p className="hint">완성 영상은 모든 씬 이미지가 준비된 뒤 생성할 수 있습니다. TTS가 실패하면 무음 영상으로 생성됩니다.</p>
+      ) : null}
+      {script && canRenderVideo && !readyVoice ? (
+        <p className="hint">TTS 음성이 없어 무음 영상으로 생성됩니다. 음성이 필요하면 내레이션 음성 생성을 다시 시도하세요.</p>
       ) : null}
       {voice?.audio_url ? <audio controls src={voice.audio_url} /> : null}
       {video?.video_url ? (

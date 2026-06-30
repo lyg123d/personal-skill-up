@@ -24,20 +24,16 @@ export async function renderShortsVideo({ script, images, audio }: RenderShortsV
   if (!("MediaRecorder" in window)) {
     throw new Error("이 브라우저는 영상 녹화를 지원하지 않습니다. Chrome 또는 Edge에서 다시 시도해주세요.");
   }
-  if (!audio?.audio_url || audio.status !== "success") {
-    throw new Error("TTS 음성을 먼저 생성해야 완성 영상으로 렌더링할 수 있습니다.");
-  }
-
   const mimeType = pickRecordingMimeType();
   if (!mimeType) {
     throw new Error("이 브라우저에서 YouTube 업로드용 WebM 영상을 만들 수 없습니다.");
   }
 
-  const audioBuffer = await decodeAudio(audio.audio_url);
+  const audioBuffer = audio?.audio_url && audio.status === "success" ? await decodeAudio(audio.audio_url) : undefined;
   const scenes = buildTimeline(script.scenes, images);
   const renderDuration = Math.max(
     3,
-    Math.min(180, Math.max(script.total_duration_sec || 0, audioBuffer.duration, scenes.at(-1)?.endsAt || 0))
+    Math.min(180, Math.max(script.total_duration_sec || 0, audioBuffer?.duration || 0, scenes.at(-1)?.endsAt || 0))
   );
 
   const loadedScenes = await Promise.all(
@@ -55,26 +51,18 @@ export async function renderShortsVideo({ script, images, audio }: RenderShortsV
     throw new Error("영상 캔버스를 초기화하지 못했습니다.");
   }
 
-  const AudioContextCtor = window.AudioContext || getWebkitAudioContext();
-  if (!AudioContextCtor) {
-    throw new Error("이 브라우저는 오디오 합성을 지원하지 않습니다.");
-  }
-
-  const audioContext = new AudioContextCtor();
-  await audioContext.resume();
-  const audioSource = audioContext.createBufferSource();
-  const audioDestination = audioContext.createMediaStreamDestination();
-  audioSource.buffer = audioBuffer;
-  audioSource.connect(audioDestination);
-
   const videoStream = canvas.captureStream(FPS);
-  const stream = new MediaStream([...videoStream.getVideoTracks(), ...audioDestination.stream.getAudioTracks()]);
+  const audioSetup = audioBuffer ? await createAudioSetup(audioBuffer) : undefined;
+  const stream = new MediaStream([
+    ...videoStream.getVideoTracks(),
+    ...(audioSetup?.destination.stream.getAudioTracks() || [])
+  ]);
 
   const blob = await recordCanvasStream({
     ctx,
     stream,
-    audioContext,
-    audioSource,
+    audioContext: audioSetup?.context,
+    audioSource: audioSetup?.source,
     loadedScenes,
     script,
     duration: renderDuration,
@@ -91,6 +79,21 @@ export async function renderShortsVideo({ script, images, audio }: RenderShortsV
     duration_sec: Math.round(renderDuration),
     blob
   };
+}
+
+async function createAudioSetup(audioBuffer: AudioBuffer) {
+  const AudioContextCtor = window.AudioContext || getWebkitAudioContext();
+  if (!AudioContextCtor) {
+    throw new Error("이 브라우저는 오디오 합성을 지원하지 않습니다.");
+  }
+
+  const context = new AudioContextCtor();
+  await context.resume();
+  const source = context.createBufferSource();
+  const destination = context.createMediaStreamDestination();
+  source.buffer = audioBuffer;
+  source.connect(destination);
+  return { context, source, destination };
 }
 
 function pickRecordingMimeType() {
@@ -164,8 +167,8 @@ function recordCanvasStream({
 }: {
   ctx: CanvasRenderingContext2D;
   stream: MediaStream;
-  audioContext: AudioContext;
-  audioSource: AudioBufferSourceNode;
+  audioContext?: AudioContext;
+  audioSource?: AudioBufferSourceNode;
   loadedScenes: LoadedScene[];
   script: NewsShortsScript;
   duration: number;
@@ -186,13 +189,13 @@ function recordCanvasStream({
     recorder.onerror = () => {
       cancelAnimationFrame(frameId);
       stream.getTracks().forEach((track) => track.stop());
-      void audioContext.close();
+      void audioContext?.close();
       reject(new Error("영상 녹화 중 오류가 발생했습니다."));
     };
     recorder.onstop = () => {
       cancelAnimationFrame(frameId);
       stream.getTracks().forEach((track) => track.stop());
-      void audioContext.close();
+      void audioContext?.close();
       resolve(new Blob(chunks, { type: mimeType }));
     };
 
@@ -207,7 +210,7 @@ function recordCanvasStream({
     drawFrame(ctx, loadedScenes, script, 0, duration);
     recorder.start(500);
     setTimeout(() => {
-      audioSource.start();
+      audioSource?.start();
       frameId = requestAnimationFrame(draw);
     }, delayMs);
     setTimeout(() => {
