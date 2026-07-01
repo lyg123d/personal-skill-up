@@ -16,9 +16,14 @@ type LocalModelError = {
 };
 
 const DEFAULT_LOCAL_MODEL_SERVICE_URL = "http://127.0.0.1:8001";
+const DEFAULT_LOCAL_IMAGE_API_URL = "https://ngoe5jtsustl.shares.zrok.io/images";
 
 function getLocalModelServiceUrl() {
   return (process.env.LOCAL_MODEL_SERVICE_URL || DEFAULT_LOCAL_MODEL_SERVICE_URL).replace(/\/$/, "");
+}
+
+function getLocalImageApiUrl() {
+  return (process.env.LOCAL_IMAGE_API_URL || DEFAULT_LOCAL_IMAGE_API_URL).replace(/\/$/, "");
 }
 
 async function postLocalModel<T>(path: string, body: unknown): Promise<T> {
@@ -46,7 +51,21 @@ function formatLocalModelError(payload: LocalModelError, raw: string) {
 }
 
 export async function generateImageWithLocalModel(prompt: string) {
-  const payload = await postLocalModel<LocalImageResponse>("/images", { prompt });
+  const response = await fetch(getLocalImageApiUrl(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt })
+  });
+
+  const raw = await response.text();
+  const payload: LocalImageResponse & LocalModelError = raw
+    ? (JSON.parse(raw) as LocalImageResponse & LocalModelError)
+    : {};
+
+  if (!response.ok) {
+    throw new Error(formatLocalModelError(payload, raw));
+  }
+
   if (!payload.image_url) {
     throw new Error(payload.error || "로컬 이미지 생성 결과가 비어 있습니다.");
   }
