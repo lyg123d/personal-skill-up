@@ -259,7 +259,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: controller.signal,
-        body: JSON.stringify({ script: state.script, narration: state.script.narration, scenes: state.script.scenes })
+        body: JSON.stringify({ script: state.script, narration: state.script.narration })
       });
       const payload = (await response.json()) as GenerateVoiceResponse & { error?: string };
       const voice = payload.voice || payload.audio;
