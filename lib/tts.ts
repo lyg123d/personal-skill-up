@@ -24,7 +24,7 @@ export async function generateSpeechWithExternalTTS(text: string) {
 }
 
 function getExternalTtsEndpoint() {
-  return (process.env.LOCAL_TTS_API_URL || "https://n3avtssi8lfm.shares.zrok.io/tts").trim();
+  return process.env.LOCAL_TTS_API_URL?.trim() || "";
 }
 
 async function readTtsError(response: Response) {

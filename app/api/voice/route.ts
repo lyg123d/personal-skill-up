@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import type { GenerateVoiceRequest, GenerateVoiceResponse, GeneratedVoiceSegment } from "@/types/news";
 import { generateSpeechWithLocalModel } from "@/lib/localModels";
 import { generateSpeechWithExternalTTS } from "@/lib/tts";
+import { createSilentAudioUrl, generateSpeechWithOpenAI, hasOpenAIKey } from "@/lib/openaiMedia";
 
 export const runtime = "nodejs";
 
@@ -87,7 +88,21 @@ async function generateSpeechAudioUrl(text: string, voice?: string) {
     }
   }
 
-  return generateSpeechWithLocalModel(text, voice);
+  try {
+    return await generateSpeechWithLocalModel(text, voice);
+  } catch (error) {
+    console.error("[TTS] local model failed:", error);
+  }
+
+  if (hasOpenAIKey()) {
+    try {
+      return await generateSpeechWithOpenAI(text);
+    } catch (error) {
+      console.error("[TTS] OpenAI fallback failed:", error);
+    }
+  }
+
+  return createSilentAudioUrl(estimateDurationSec(text));
 }
 
 function getTtsInputText(body: GenerateVoiceRequest) {
@@ -116,4 +131,10 @@ async function saveOrInlineAudio(audioBuffer: Buffer) {
   } catch {
     return `data:audio/mpeg;base64,${audioBuffer.toString("base64")}`;
   }
+}
+
+function estimateDurationSec(text: string) {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (!clean) return 2;
+  return Math.max(2, Math.min(12, Math.ceil(clean.length / 12)));
 }
