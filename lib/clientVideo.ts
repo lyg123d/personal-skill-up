@@ -367,23 +367,28 @@ function drawCaptionBand(ctx: CanvasRenderingContext2D, text: string) {
   const caption = normalizeCaptionText(text);
   if (!caption) return;
 
-  const x = 42;
-  const y = 1084;
-  const width = VIDEO_WIDTH - 84;
-  const height = 92;
+  const x = 30;
+  const y = 980;
+  const width = VIDEO_WIDTH - 60;
+  const height = 140;
 
-  ctx.fillStyle = "rgba(0, 0, 0, 0.62)";
+  ctx.fillStyle = "rgba(0, 0, 0, 0.82)";
   roundRect(ctx, x, y, width, height, 26);
 
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.14)";
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+  ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.roundRect(x, y, width, height, 26);
   ctx.stroke();
 
   ctx.fillStyle = "#ffffff";
-  ctx.font = "900 32px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
-  drawWrappedText(ctx, caption, x + 24, y + 38, width - 48, 34, 2);
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.68)";
+  ctx.lineWidth = 8;
+  ctx.lineJoin = "round";
+  ctx.font = "900 40px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  drawWrappedText(ctx, caption, x + 28, y + 50, width - 56, 42, 3, true);
+  ctx.fillStyle = "#ffffff";
+  drawWrappedText(ctx, caption, x + 28, y + 50, width - 56, 42, 3);
 }
 
 function drawWrappedText(
@@ -393,10 +398,15 @@ function drawWrappedText(
   y: number,
   maxWidth: number,
   lineHeight: number,
-  maxLines: number
+  maxLines: number,
+  stroke = false
 ) {
   const lines = wrapText(ctx, text, maxWidth, maxLines);
   lines.forEach((line, index) => {
+    if (stroke) {
+      ctx.strokeText(line, x, y + index * lineHeight);
+      return;
+    }
     ctx.fillText(line, x, y + index * lineHeight);
   });
 }
